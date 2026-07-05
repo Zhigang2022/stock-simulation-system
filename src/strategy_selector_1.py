@@ -109,7 +109,7 @@ class InformationDiscreteMomentum(BaseStrategy):
         x = np.arange(self.lookback_days)
         
         scores_dict = {}
-        
+        r2_dict={}
         # 2. Iterate across the asset cross-section to fit the model
         for ticker in window_log_prices.columns:
             y = window_log_prices[ticker].values
@@ -133,6 +133,7 @@ class InformationDiscreteMomentum(BaseStrategy):
             # Core Formula: Slope * R-squared
             # This penalizes any deviation from a straight line
             scores_dict[ticker] = slope * r_squared
+            r2_dict[ticker]=r_squared
 
         # 3. Format as Series and convert to Cross-Sectional Percentile Rank
         raw_scores = pd.Series(scores_dict)

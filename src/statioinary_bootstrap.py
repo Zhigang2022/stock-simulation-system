@@ -15,6 +15,8 @@ class VectorizedBootstrapEngine:
         
         # Calculate returns for the price component
         self.returns_df = self.prices_df.pct_change().dropna()
+        assert (self.prices_df.shape[0]-self.returns_df.shape[0])<30
+
         # Align volume to match the same dates as the returns
         self.volume_df = self.volume_df.loc[self.returns_df.index]
         
