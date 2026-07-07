@@ -47,8 +47,9 @@ class IntegratedBudgetAllocator:
         # PART A: REGULAR REBALANCE WEIGHT CONFIGURATION (SLOW SLEEVE)
         # -------------------------------------------------------------
         core_target_weights: Dict[str, float] = {}
-        regular_signals=getattr(state.regular_output,'signals',None)
-        ad_hoc_signals=getattr(state.regular_output,'signals',None)
+        signals=getattr(state,'signals')
+        regular_signals=getattr(signals.regular_strategy_output,'signals',None)
+        ad_hoc_signals=getattr(signals.adhoc_strategy_output,'signals',None) 
           
         if regular_signals:
             # Isolate scores

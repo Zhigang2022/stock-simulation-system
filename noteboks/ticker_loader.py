@@ -100,3 +100,16 @@ def get_random_sample(original_list: list, sample_size: int) -> list:
 
 def load_total_tickers():
     return 'ATVI,SNPS,CPRT,SBUX,SPLK,AMZN,AVGO,NFLX,KLAC,ABNB,JD,ILMN,INTU,FTNT,AMAT,ENPH,KHC,CSGP,AMD,DOCU,ANSS,ROST,MNST,TMUS,TRI,PTON,MDB,ADSK,MU,CDNS,LRCX,BKNG,CEG,NVDA,META,PEP,EXC,FAST,VRSN,INSM,ZM,COST,CTSH,ON,TEAM,MAR,NTES,INTC,PANW,VRTX,FI,PDD,AZN,MRVL,CTAS,GOOG,XEL,CSX,TXN,GOOGL,ORLY,VRSK,ASML,ZS,DDOG,TTD,ALGN,TSLA,AMGN,ADP,SMCI,NXPI,CSCO,BIDU,MELI,MTCH,ADBE,HON,MDLZ,EBAY,CRWD,LULU,PYPL,WDAY,REGN,DXCM,MCHP,AAPL,GILD,CHTR,SWKS,CMCSA,OKTA,LCID,SIRI,WBA,KDP,IDXX,XLNX,CDW,QCOM,AEP,PCAR,DLTR,ISRG,EA,MRNA,BIIB,PAYX,MSFT,SGEN,ADI'.split(',')
+
+
+def fix_data(universe_data):
+    df_price=universe_data['price']
+    df_vol=universe_data['volume']
+    print(f'price shape before drop: {df_price.shape}')
+    df_price=df_price.dropna(axis=1)
+    print(f'price shape after drop: {df_price.shape}')
+    df_vol=df_vol[df_price.columns]
+    print(f'volume shape after drop: {df_vol.shape}')
+    universe_data['price']=df_price
+    universe_data['volume']=df_vol
+    return universe_data

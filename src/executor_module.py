@@ -2,120 +2,149 @@
 import pandas as pd
 from typing import Dict, List
 from src.signal_schema import SignalPayload
+from dataclasses import dataclass
+from src import logging
+logger=logging.setup_logger(name="backtest_logger", log_file="backtest.log")
 
-# TODO: by now, only support ad_hoc buy/sell can't happen at the same day
+
+@dataclass(frozen=True)
+class ExecutedTrade:
+    """Immutable single asset transaction record."""
+    date: pd.Timestamp
+    ticker: str
+    action: str        # "BUY" or "SELL"
+    sleeve: str        # "CORE" or "TACTICAL"
+    shares: float
+    price: float
+    gross_value: float
+    fee: float
+    net_value: float
+
+
+
+# executor_module.py
+import pandas as pd
+import numpy as np
+
 class TransactionExecutor:
     """
-    Module D: Refactored Stateful Transaction Executor.
-    Flipped to act as a direct receiver of completed target weights and approved orders.
+    Module D: Stateful Transaction Executor.
+    Evaluates net weight targets and applies transactional mutations atomically.
     """
-    def __init__(self, fee_rate: float = 0.001,trade_delay=1):
+    def __init__(self, fee_rate: float = 0.001, trade_delay: int = 1):
         self.fee_rate = fee_rate
-        self.trade_delay=trade_delay
+        self.trade_delay = trade_delay
 
-    def execute_trades(self, 
-                       state, 
-                       today, 
-                       current_prices: pd.Series):
+    def execute_trades(self, state, today: pd.Timestamp, current_prices: pd.Series):
         """
-        Executes explicit, validated transactions against isolated global state properties.
-        Enforces execution order: Exits handled before Rebalances are established.
+        Evaluates and runs explicit adjustments against the global state.
+        Enforces execution priority: Exits/Sells executed before Buys/Deployments.
         """
-        is_core=state.need_trade.is_trade_core(today,self.trade_delay)
-        is_sell_adhoc=state.need_trade.is_sell_adhoc(today,self.trade_delay)
-        # print('*****')
-        # print(f'is_core: {is_core}, is_sell_adhoc: {is_sell_adhoc}')
+        is_core = state.need_trade.is_trade_core(today, self.trade_delay)
+        is_sell_adhoc = state.need_trade.is_sell_adhoc(today, self.trade_delay)
         
-        if not(is_core or is_sell_adhoc):
+        if not (is_core or is_sell_adhoc):
             return 
-            
-        # 1. PROCESS HIGH-PRIORITY EXITS FIRST
+
+        # -----------------------------------------------------------------
+        # STEP 1: PROCESS HIGH-PRIORITY AD-HOC EXITS
+        # -----------------------------------------------------------------
         if is_sell_adhoc:
-            sell_adhoc=state.need_trade.sell_adhoc
+            sell_adhoc = state.need_trade.sell_adhoc
             for signal in sell_adhoc:
                 if signal.kind == "AD_HOC_EXIT" and signal.ticker in state.tactical_positions:
                     shares = state.tactical_positions[signal.ticker]
                     if shares > 0:
-                        proceeds = (shares * current_prices[signal.ticker]) * (1.0 - self.fee_rate)
-                        state.tactical_cash += proceeds
-                        state.tactical_positions.pop(signal.ticker, None)
-                        state.tactical_peaks.pop(signal.ticker, None)
+                        price = current_prices[signal.ticker]
+                        gross = shares * price
+                        fee = gross * self.fee_rate
+                        
+                        trade_rec = ExecutedTrade(
+                            date=today, ticker=signal.ticker, action="SELL", sleeve="TACTICAL",
+                            shares=shares, price=price, gross_value=gross, fee=fee, net_value=gross - fee
+                        )
+                        # State is updated immediately following calculation loop
+                        logger.info(f'    {today}: ADHOC_SELL {ticker} ... {round(shares,2)}@{round(price,2)}, fee: {fee}')
+                        state.commit_executed_trade(trade_rec)
 
-            print(f'sell :{sell_adhoc}')
-            state.trade.clear_adhoc_sell()
+            state.need_trade.clear_adhoc_sell()
 
-        # 2. PROCESS OPTIMIZED POSITION NETTING TO MINIMIZE TRANSACTION FEES
+        # -----------------------------------------------------------------
+        # STEP 2: PROCESS CORE POSITION REBALANCING (NETTING METHOD)
+        # -----------------------------------------------------------------
         if is_core:
-            core_target_weights=state.need_trade.core_target_weights
-            # Calculate current total value of the core sleeve BEFORE making any changes
+            core_target_weights = state.need_trade.core_target_weights
             total_core_value = state.calculate_sleeve_value(state.core_cash, state.core_positions, current_prices)
-            
-            # Map out target dollar amounts for each asset
-            target_dollars = {ticker: total_core_value * weight for ticker, weight in core_target_weights.items()}
-            
-            # Map out current dollar amounts for each asset
-            current_dollars = {ticker: state.core_positions.get(ticker, 0.0) * current_prices[ticker] for ticker in current_prices.index}
-            
-            # Calculate the net difference vector (Target $ - Current $)
-            # Positive delta = Need to BUY more. Negative delta = Need to SELL/TRIM.
+
+            # Map target and current value vectors
+            target_dollars = {t: total_core_value * w for t, w in core_target_weights.items()}
+            current_dollars = {t: state.core_positions.get(t, 0.0) * current_prices[t] for t in current_prices.index}
+
             deltas = {}
             all_tickers = set(target_dollars.keys()).union(set(current_dollars.keys()))
             for ticker in all_tickers:
                 deltas[ticker] = target_dollars.get(ticker, 0.0) - current_dollars.get(ticker, 0.0)
 
-            # -----------------------------------------------------------------
-            # STEP 1: EXECUTE ALL SELLS & TRIMS FIRST (Generates Cash Buffer)
-            # -----------------------------------------------------------------
+            # Use a threshold relative to portfolio value, not a fixed tiny dollar amount
+            MIN_TRADE_DOLLARS = max(1.0, total_core_value * 1e-4)
+
+            # --- SUB-STEP A: SELLS & TRIMS FIRST (Generates Cash Buffer) ---
+            cash_raised = 0.0
             for ticker, delta in deltas.items():
-                if delta < 0:  # We hold too much or need to drop it entirely
+                if delta < -MIN_TRADE_DOLLARS:
                     dollars_to_free_up = abs(delta)
                     current_shares = state.core_positions.get(ticker, 0.0)
-                    
-                    # Prevent floating-point over-selling errors
-                    shares_to_sell = min(dollars_to_free_up / current_prices[ticker], current_shares)
-                    
-                    if shares_to_sell > 0:
-                        gross_proceeds = shares_to_sell * current_prices[ticker]
-                        fee = gross_proceeds * self.fee_rate
-                        
-                        # Update State
-                        state.core_cash += (gross_proceeds - fee)
-                        state.fees_paid += fee
-                        state.core_positions[ticker] -= shares_to_sell
+                    price = current_prices[ticker]
 
-            # -----------------------------------------------------------------
-            # STEP 2: EXECUTE ALL BUYS & EXPANSIONS SECOND (Deploys Cash)
-            # -----------------------------------------------------------------
-            # Create a small safety haircut fraction across our buy orders to ensure commissions don't overdraw cash
-            buy_orders = {ticker: delta for ticker, delta in deltas.items() if delta > 0}
+                    # Account for fee up front: to NET dollars_to_free_up after fee,
+                    # we need to sell slightly more gross.
+                    gross_needed = dollars_to_free_up / (1.0 - self.fee_rate)
+                    shares_to_sell = min(gross_needed / price, current_shares)
+
+                    if shares_to_sell > 0:
+                        gross = shares_to_sell * price
+                        fee = gross * self.fee_rate
+                        net = gross - fee
+
+                        sell_trade = ExecutedTrade(
+                            date=today, ticker=ticker, action="SELL", sleeve="CORE",
+                            shares=shares_to_sell, price=price, gross_value=gross, fee=fee, net_value=net
+                        )
+                        logger.info(f'    {today}:CORE_SELL {ticker} ... {round(shares_to_sell,2)}@{round(price,2)}, fee: {round(fee,2)}')
+                        state.commit_executed_trade(sell_trade)
+                        cash_raised += net
+
+            # --- SUB-STEP B: BUYS & ALLOCATIONS SECOND (Deploys Generated Cash) ---
+            buy_orders = {t: d for t, d in deltas.items() if d > MIN_TRADE_DOLLARS}
             total_requested_buys = sum(buy_orders.values())
-            
+
             if total_requested_buys > 0:
-                # Scale the buys proportionally to fit exactly inside our available cash minus transaction costs
-                available_buy_pool = state.core_cash * (1.0 - self.fee_rate)
+                # Use actual available cash (existing cash + what selling just raised),
+                # haircut for fees on the buy side too.
+                available_cash = state.core_cash
+                available_buy_pool = available_cash * (1.0 - self.fee_rate)
                 scaling_factor = min(available_buy_pool / total_requested_buys, 1.0)
-                
-                total_fee=0
+
+                total_fee_step = 0.0
                 for ticker, delta in buy_orders.items():
                     allocated_cash = delta * scaling_factor
+                    price = current_prices[ticker]
                     fee = allocated_cash * self.fee_rate
-                    
-                    shares_to_buy = allocated_cash / current_prices[ticker]
-                    
-                    # Update State
-                    state.core_positions[ticker] = state.core_positions.get(ticker, 0.0) + shares_to_buy
-                    state.core_cash -= (allocated_cash + fee)
-                    state.fees_paid += fee
-                    total_fee+=fee
-            print(f'{today} rebalance to {core_target_weights}, paid fee: {total_fee}')
-            state.need_trade.clear_core()
-            state.record_daily_snapshot(today,current_prices,kind='act')
+                    shares_to_buy = (allocated_cash - fee) / price  # fee comes OUT of allocated cash, not on top
 
-        # # 3. PROCESS SPECULATIVE AD-HOC BUY ENTRIES LAST
-        # if is_adhod:
-        #     for signal in approved_ad_hoc:
-        #         if signal.kind == "AD_HOC_BUY":
-        #             # Allocating a predefined tactical cash buffer slot to position entry
-        #             tactical_allocation = state.tactical_cash * 0.20 
-        #             state.tactical_positions[signal.ticker] = tactical_allocation / current_prices[signal.ticker]
-        #             state.tactical_cash -= tactical_allocation
+                    if shares_to_buy > 0:
+                        gross = shares_to_buy * price
+                        buy_trade = ExecutedTrade(
+                            date=today, ticker=ticker, action="BUY", sleeve="CORE",
+                            shares=shares_to_buy, price=price, gross_value=gross, fee=fee, net_value=gross + fee
+                        )
+                        logger.info(f'    {today}:CORE_BUY {ticker} ... {round(shares_to_buy,2)}@{round(price,2)}, fee: {round(fee,2)}')
+                        state.commit_executed_trade(buy_trade)
+                        total_fee_step += fee
+                        
+            # Finalize block execution parameters
+            state.need_trade.clear_core()
+            state.record_daily_snapshot(today, current_prices, kind='act')
+
+
+    ### ADHOC buy

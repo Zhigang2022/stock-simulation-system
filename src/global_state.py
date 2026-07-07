@@ -6,9 +6,10 @@ from typing import Dict, Any
 from datetime import date
 from dataclasses import dataclass
 from typing import Optional, Dict
+from src.executor_module import ExecutedTrade
 
 @dataclass
-class Transaction:
+class Future_Transaction:
     # Defines the structure and handles default initialization
     core_target_weights: Optional[Dict[str, float]] = None
     core_target_date: Optional[date] = None
@@ -62,7 +63,20 @@ class Transaction:
             if (today-self.buy_adhoc_date).days>=delay_days:
                 return True
         return False
-    
+
+@dataclass
+class Transient_Signals():
+    regular_strategy_output=None
+    adhoc_strategy_output=None
+
+    def update_signals(self,regular_strategy_output,adhoc_strategy_output):
+        self.regular_strategy_output=regular_strategy_output
+        self.adhoc_strategy_output=adhoc_strategy_output
+
+    def clear_signals(self):
+        self.regular_strategy_output=None
+        self.adhoc_strategy_output=None
+
 
 class GlobalState:
     """
@@ -111,10 +125,10 @@ class GlobalState:
         self.fees_paid=0
 
         # transaction needed
-        self.need_trade=Transaction()
-        self.regular_output=None
-        self.adhoc_output=None
+        self.need_trade=Future_Transaction()
+        self.signals=Transient_Signals()
         
+
 
     @property
     def total_cash(self) -> float:
@@ -138,6 +152,33 @@ class GlobalState:
             equity_value += shares * market_prices[ticker]
             
         return cash + equity_value
+
+    def commit_executed_trade(self, trade: "ExecutedTrade"):
+        """
+        The absolute single source of truth for portfolio updates.
+        Applies a validated trade transaction ledger entry to state balances.
+        """
+        if trade.sleeve == "CORE":
+            if trade.action == "SELL":
+                self.core_cash += trade.net_value  # gross - fee
+                self.core_positions[trade.ticker] -= trade.shares
+            elif trade.action == "BUY":
+                self.core_positions[trade.ticker] = self.core_positions.get(trade.ticker, 0.0) + trade.shares
+                self.core_cash -= (trade.gross_value + trade.fee)
+            self.fees_paid += trade.fee
+                
+        elif trade.sleeve == "TACTICAL":
+            if trade.action == "SELL":
+                self.tactical_cash += trade.net_value
+                self.tactical_positions.pop(trade.ticker, None) #sell all
+                self.tactical_peaks.pop(trade.ticker, None)
+            if trade.action == "BUY":
+                # Enforce clean baseline initialization to avoid fractional leakage
+                current_shares = self.tactical_positions.get(trade.ticker, 0.0)
+                self.tactical_positions[trade.ticker] = current_shares + trade.shares
+                self.tactical_cash -= (trade.gross_value + trade.fee)
+            self.fees_paid += trade.fee
+
 
     def record_daily_snapshot(self, date: Any, market_prices: pd.Series,kind='daily') -> float:
         """

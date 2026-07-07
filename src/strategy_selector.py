@@ -4,198 +4,84 @@ import numpy as np
 from src.signal_schema import SignalPayload, StrategyOutput, StrategyTelemetry
 from abc import ABC, abstractmethod
 
-class BaseStrategy:
-    """
-    Abstract base class for trading strategies.
-    """
-    def calculate_signals(self, snapshot: dict[str, pd.DataFrame]) -> tuple[StrategyOutput, dict[str, float] | None]:
-        """
-        Calculate trading signals based on the provided historical snapshot data.
-
-        Parameters
-        ----------
-        snapshot : dict[str, pd.DataFrame]
-            A dictionary containing historical market data. Typically includes a "price"
-            key with a DataFrame where columns represent tickers and rows represent time steps.
-
-        Returns
-        -------
-        tuple[StrategyOutput, dict[str, float] | None]
-            A tuple containing:
-            - StrategyOutput: The container holding calculated SignalPayload signals.
-            - dict[str, float] | None: Auxiliary metrics computed during execution (e.g., diagnostic values).
-        """
-        raise NotImplementedError
-
-
-class RiskAdjustedMomentum(BaseStrategy):
-    """
-    Risk-Adjusted Momentum strategy.
-
-    This strategy ranks assets based on their cumulative return over a specified lookback
-    period, normalized by their annualized daily return volatility over the same period.
-    """
-    def __init__(self, lookback_days: int = 252):
-        """
-        Initialize the RiskAdjustedMomentum strategy.
-
-        Parameters
-        ----------
-        lookback_days : int, default 252
-            The number of historical trading days to include in the lookback window.
-        """
-        self.lookback_days = lookback_days
-
-    def calculate_signals(self, snapshot: dict[str, pd.DataFrame]) -> tuple[StrategyOutput, None]:
-        """
-        Compute risk-adjusted momentum signals for each asset in the snapshot.
-
-        Calculates the ratio of the historical return to the annualized volatility
-        over the lookback window. Scores are then ranked and converted to percentiles.
-
-        Parameters
-        ----------
-        snapshot : dict[str, pd.DataFrame]
-            A dictionary containing historical market data, requiring at least the "price" key.
-
-        Returns
-        -------
-        tuple[StrategyOutput, None]
-            A tuple containing:
-            - StrategyOutput: The standardized signals with percentile ranks as scores.
-            - None: Placeholder indicating no auxiliary parameters are returned.
-        """
-        prices = snapshot["price"]
-        output = StrategyOutput()
-        
-        if len(prices) < self.lookback_days:
-            return output, None
-            
-        window_prices = prices.iloc[-self.lookback_days:]
-        current_price = window_prices.iloc[-1]
-        historical_price = window_prices.iloc[0]
-        raw_returns = (current_price / historical_price) - 1
-        
-        daily_returns = window_prices.pct_change()
-        annualized_volatility = daily_returns.std() * np.sqrt(252)
-        
-        risk_adjusted_momentum = raw_returns / annualized_volatility
-        risk_adjusted_momentum = risk_adjusted_momentum.replace([np.inf, -np.inf], np.nan)
-        
-        momentum_scores = risk_adjusted_momentum.rank(pct=True, na_option='keep')
-        momentum_scores = momentum_scores.fillna(0.0)
-        
-        # Build standard output payload
-        for ticker, score in momentum_scores.items():
-            output.append(SignalPayload(
-                ticker=str(ticker),
-                kind="REGULAR_REBALANCE",
-                score=float(score)
-            ))
-            
-        return output, None
-
- 
-class InformationDiscreteMomentum(BaseStrategy):
-    """
-    Information Discrete Momentum strategy.
-
-    This strategy measures the consistency and strength of price trends by performing 
-    a linear regression on log-prices over a specified lookback window. The score for 
-    each asset is computed as the product of the regression slope and the coefficient of 
-    determination (R-squared).
-    """
-    def __init__(self, lookback_days: int = 252):
-        """
-        Initialize the InformationDiscreteMomentum strategy.
-
-        Parameters
-        ----------
-        lookback_days : int, default 252
-            The number of historical trading days to include in the lookback window.
-        """
-        self.lookback_days = lookback_days
-
-    def calculate_signals(self, snapshot: dict[str, pd.DataFrame]) -> tuple[StrategyOutput, dict[str, float]]:
-        """
-        Compute information discrete momentum signals for each asset in the snapshot.
-
-        Performs a linear regression of the natural log of asset prices against time
-        over the lookback window. The final score is the regression slope multiplied by
-        the regression's R-squared value, which is then ranked and converted to percentiles.
-
-        Parameters
-        ----------
-        snapshot : dict[str, pd.DataFrame]
-            A dictionary containing historical market data, requiring at least the "price" key.
-
-        Returns
-        -------
-        tuple[StrategyOutput, dict[str, float]]
-            A tuple containing:
-            - StrategyOutput: The standardized signals with percentile ranks as scores.
-            - dict[str, float]: A dictionary mapping each ticker symbol to its computed R-squared value.
-        """
-        prices = snapshot["price"]
-        output = StrategyOutput()
-        
-        if len(prices) < self.lookback_days:
-            return output, {}
-            
-        window_log_prices = np.log(prices.iloc[-self.lookback_days:])
-        x = np.arange(self.lookback_days)
-        scores_dict = {}
-        r2_dict = {}
-        slope_dict={}
-        
-        for ticker in window_log_prices.columns:
-            y = window_log_prices[ticker].values
-            if np.isnan(y).all() or len(y[~np.isnan(y)]) < self.lookback_days:
-                scores_dict[ticker] = np.nan
-                r2_dict[ticker] = 0.0
-                slope_dict[ticker]=0.0
-                continue
-                
-            slope, intercept = np.polyfit(x, y, 1)
-            y_pred = slope * x + intercept
-            y_bar = np.mean(y)
-            ss_tot = np.sum((y - y_bar) ** 2)
-            ss_res = np.sum((y - y_pred) ** 2)
-            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-            
-            scores_dict[ticker] = slope * r_squared
-            r2_dict[ticker] = r_squared
-            slope_dict[ticker]=slope
-
-        raw_scores = pd.Series(scores_dict)
-        momentum_scores = raw_scores.rank(pct=True, na_option='keep')
-        momentum_scores = momentum_scores.fillna(0.0)
-        
-        # Build standard output payload
-        for ticker, score in momentum_scores.items():
-            output.append(SignalPayload(
-                ticker=str(ticker),
-                kind="REGULAR_REBALANCE",
-                score=float(score)
-            ))
-            
-        strategy_tele=StrategyTelemetry(metrics={'r2':r2_dict,
-                                                 'slope':slope_dict})
-        return output, strategy_tele
-
 
 class MomentumScorer(ABC):
     @abstractmethod
-    def compute_score(self, y: np.ndarray) -> tuple[float, float]:
-        """Returns tuple of (raw_score, auxiliary_telemetry_metric)"""
+    def compute_score(self, prices: np.ndarray) -> tuple[float, dict[str, float]]:
+        """
+        Compute the strategy score and return a flexible dictionary of diagnostic metrics.
+
+        Returns
+        -------
+        score : float
+            The final scalar value used for cross-sectional ranking.
+        metrics : dict[str, float]
+            A dictionary containing any arbitrary calculation parameters for auditing.
+        """
         pass
 
+class SimpleRiskAdjustedScorer(MomentumScorer):
+    """
+    TRADITIONAL BASELINE:
+    Calculates raw arithmetic cumulative return divided by annualized daily volatility.
+    last element of prices is current day, the first element of the prices is the compare day
+    """
+    def compute_score(self, prices: np.ndarray) -> tuple[float, dict[str, float]]:
+        if len(prices) < 2 or prices[0] <= 0:
+            return np.nan, {}
+        
+        # Cumulative simple return: (P_end / P_start) - 1
+        raw_return = (prices[-1] / prices[0]) - 1
+        
+        # Annualized daily volatility
+        daily_returns = np.diff(prices) / prices[:-1]
+        vol = np.std(daily_returns) * np.sqrt(252)
+        
+        if vol == 0 or np.isnan(vol):
+            return np.nan, {'volatile': vol}
+            
+        score = raw_return / vol
+        return score, {'volatile':vol}
+    
+
+class TraditionalLinearRegressionScorer(MomentumScorer):
+    """
+    TRADITIONAL BASELINE:
+    Performs standard unweighted OLS on log prices.
+    Score = slope * R-squared.
+    """
+    def compute_score(self, prices: np.ndarray) -> tuple[float, dict[str, float]]:
+        n = len(prices)
+        if n < 3:
+            return np.nan, {}
+            
+        y = np.log(prices)
+        x = np.arange(n)
+        
+        # Equal-weighted Ordinary Least Squares
+        slope, intercept = np.polyfit(x, y, 1)
+        
+        y_pred = slope * x + intercept
+        y_bar = np.mean(y)
+        ss_tot = np.sum((y - y_bar) ** 2)
+        ss_res = np.sum((y - y_pred) ** 2)
+        
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        score = slope * r_squared
+        # Return everything you might ever want to debug or analyze later
+        metrics_dict = {
+            "slope": float(slope),
+            "r_squared": float(r_squared),
+            "intercept": float(intercept)
+        }
+        return score, metrics_dict
 
 class GeometricDriftScorer(MomentumScorer):
     """Calculates continuous drift rate adjusted for volatility drag."""
-    def compute_score(self, prices: np.ndarray) -> tuple[float, float]:
+    def compute_score(self, prices: np.ndarray) -> tuple[float, dict[str, float]]:
         if len(prices) < 2 or prices[0] <= 0:
-            return np.nan, np.nan
+            return np.nan, {}
         
         # Calculate log returns for compounding accuracy
         log_returns = np.diff(np.log(prices))
@@ -203,10 +89,16 @@ class GeometricDriftScorer(MomentumScorer):
         
         # Total continuous return over the window
         total_log_return = np.log(prices[-1] / prices[0])
-        
-        # Volatility drag subtraction: True geometric drift rate
-        geometric_drift = total_log_return - (0.5 * (vol ** 2))
-        return geometric_drift, vol
+
+        T = len(prices) / 252  # years
+        annualized_log_return = total_log_return / T
+        geometric_drift = annualized_log_return - 0.5 * vol**2
+
+        metrics_dict = {
+            "volatility": float(vol),
+            "raw_log_return": float(total_log_return)
+        }
+        return geometric_drift, metrics_dict
 
 
 class WeightedLinearRegressionScorer(MomentumScorer):
@@ -214,10 +106,10 @@ class WeightedLinearRegressionScorer(MomentumScorer):
     def __init__(self, decay_factor: float = 0.98):
         self.decay_factor = decay_factor
 
-    def compute_score(self, prices: np.ndarray) -> tuple[float, float]:
+    def compute_score(self, prices: np.ndarray) -> tuple[float, dict[str, float]]:
         n = len(prices)
         if n < 3:
-            return np.nan, np.nan
+            return np.nan, {}
             
         y = np.log(prices)
         x = np.arange(n)
@@ -242,18 +134,22 @@ class WeightedLinearRegressionScorer(MomentumScorer):
             ss_res = np.sum(weights * (y - y_pred) ** 2)
             r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
             
-            return slope * r_squared, r_squared
+            metrics_dict = {
+            "slope": float(slope),
+            "r_squared": float(r_squared),
+            }
+
+            return slope * r_squared, metrics_dict
         except np.linalg.LinAlgError:
-            return np.nan, np.nan
+            return np.nan, {}
 
 # ==========================================
 # 2. ADVANCED COMPOSITE STRATEGY MODULES
 # ==========================================
-
 class ComprehensiveMultiHorizonStrategy:
     """
-    Advanced cross-sectional strategy combining Structural (Long-Term) 
-    and Tactical (Short-Term) momentum components via pluggable scorers.
+    Unified execution harness that coordinates multi-horizon (long vs short) 
+    cross-sectional ranking using any interchangeable MomentumScorer block.
     """
     def __init__(
         self, 
@@ -273,64 +169,63 @@ class ComprehensiveMultiHorizonStrategy:
         output = StrategyOutput()
         telemetry = StrategyTelemetry()
         
-        # Initialize sub-structures in telemetry for clarity and debugging
-        telemetry.metrics["long_raw"] = {}
-        telemetry.metrics["short_raw"] = {}
-        telemetry.metrics["aux_metric"] = {}
+        # We don't hardcode individual metric keys anymore; 
+        # we initialize a dynamic multi-level dict structure
+        # telemetry.metrics will hold structures like: {"slope_long": {"AAPL": 0.012}, "r_squared_long": {"AAPL": 0.85}}
         
-        # Require enough history for the max lookup window
         if len(prices) < self.long_window:
             return output, telemetry
             
         long_snapshot = prices.iloc[-self.long_window:]
         short_snapshot = prices.iloc[-self.short_window:]
         
-        long_raw_dict = {}
-        short_raw_dict = {}
+        long_scores_dict = {}
+        short_scores_dict = {}
         
         for ticker in prices.columns:
-            # 1. Compute Structural Momentum (Long-Term)
+            # 1. Long Horizon Calculation
             y_long = long_snapshot[ticker].dropna().values
             if len(y_long) == self.long_window:
-                l_score, l_aux = self.scorer.compute_score(y_long)
-                long_raw_dict[ticker] = l_score
-                telemetry.metrics["aux_metric"][f"{ticker}_long"] = l_aux
-            else:
-                long_raw_dict[ticker] = np.nan
+                l_score, l_metrics = self.scorer.compute_score(y_long)
+                long_scores_dict[ticker] = l_score
                 
-            # 2. Compute Tactical Momentum (Short-Term)
+                # Dynamically unpack all metrics provided by the scorer for the long window
+                for metric_name, value in l_metrics.items():
+                    key = f"{metric_name}_long"
+                    if key not in telemetry.metrics:
+                        telemetry.metrics[key] = {}
+                    telemetry.metrics[key][ticker] = value
+            else:
+                long_scores_dict[ticker] = np.nan
+
+            # 2. Short Horizon Calculation
             y_short = short_snapshot[ticker].dropna().values
             if len(y_short) == self.short_window:
-                s_score, s_aux = self.scorer.compute_score(y_short)
-                short_raw_dict[ticker] = s_score
-                telemetry.metrics["aux_metric"][f"{ticker}_short"] = s_aux
+                s_score, s_metrics = self.scorer.compute_score(y_short)
+                short_scores_dict[ticker] = s_score
+                
+                # Dynamically unpack all metrics provided by the scorer for the short window
+                for metric_name, value in s_metrics.items():
+                    key = f"{metric_name}_short"
+                    if key not in telemetry.metrics:
+                        telemetry.metrics[key] = {}
+                    telemetry.metrics[key][ticker] = value
             else:
-                short_raw_dict[ticker] = np.nan
+                short_scores_dict[ticker] = np.nan
 
-        # Convert to series to calculate cross-sectional rank percentiles
-        long_series = pd.Series(long_raw_dict)
-        short_series = pd.Series(short_raw_dict)
+        # Save the finalized structural composite scores to telemetry for auditing
+        telemetry.metrics["raw_score_long"] = {t: float(v) for t, v in long_scores_dict.items()}
+        telemetry.metrics["raw_score_short"] = {t: float(v) for t, v in short_scores_dict.items()}
+
+        # 3. Cross-sectional ranking logic
+        long_ranks = pd.Series(long_scores_dict).rank(pct=True, na_option='keep')
+        short_ranks = pd.Series(short_scores_dict).rank(pct=True, na_option='keep')
         
-        # Store raw parameters in audit trail before percentile adjustments
-        for ticker in prices.columns:
-            telemetry.metrics["long_raw"][ticker] = float(long_series.get(ticker, np.nan))
-            telemetry.metrics["short_raw"][ticker] = float(short_series.get(ticker, np.nan))
-            
-        long_ranks = long_series.rank(pct=True, na_option='keep')
-        short_ranks = short_series.rank(pct=True, na_option='keep')
-        
-        # 3. Blend standardized cross-sectional scores
         composite_scores = (long_ranks * self.structural_weight) + (short_ranks * self.tactical_weight)
-        composite_scores = composite_scores.fillna(0.0)
-        
-        # Final ranking pass over composite values to normalize signals to standard [0, 1] range
-        final_percentiles = composite_scores.rank(pct=True)
+        final_percentiles = composite_scores.fillna(0.0).rank(pct=True)
 
         for ticker, score in final_percentiles.items():
-            output.append(SignalPayload(
-                ticker=str(ticker),
-                kind="REGULAR_REBALANCE",
-                score=float(score)
-            ))
+            output.append(SignalPayload(ticker=str(ticker), kind="REGULAR_REBALANCE", score=float(score)))
             
         return output, telemetry
+
