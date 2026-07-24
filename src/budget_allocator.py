@@ -59,7 +59,7 @@ class IntegratedBudgetAllocator:
             cutoff_quantile = 1.0 - self.top_percent
             threshold_score = scores_series.quantile(cutoff_quantile)
             top_candidates = scores_series[scores_series >= threshold_score]
-            
+
             if not top_candidates.empty:
                 if self.allocation_type == "equal":
                     weight = 1.0 / len(top_candidates)

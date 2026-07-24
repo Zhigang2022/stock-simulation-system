@@ -1,8 +1,9 @@
 import pandas as pd
 from typing import List
 from src.signal_schema import StrategyOutput, SignalPayload
+from filters.base_filter import  SignalFilter
 
-class LiquidityComplianceFilter:
+class LiquidityComplianceFilter(SignalFilter):
     """
     Module D-Gateway: Pure Screening Layer.
     Validates signal eligibility against real-world liquidity data.
@@ -44,3 +45,12 @@ class LiquidityComplianceFilter:
                       f"ADDV ${mean_dollar_volume:,.2f} < Minimum ${self.min_dollar_volume:,.2f}")
                 
         return sanitized_output
+    
+
+
+# TODO 
+'''
+3. Dual momentum (Antonacci's full framework, combines both layers)
+Step 1 — relative momentum: among a small set of alternatives (say, US stocks vs international stocks vs bonds), pick whichever had the strongest trailing 12-month return.
+Step 2 — absolute momentum filter on the winner: check if that winner's own trailing return also beats cash. If yes, hold it. If no — even though it "won" the relative comparison — go to cash instead.
+'''

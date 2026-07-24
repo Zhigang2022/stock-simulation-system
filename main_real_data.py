@@ -1,138 +1,158 @@
-import numpy as np
-np.random.seed(42)
-import pandas as pd
-from tqdm import tqdm
-
-from src import data_broker
-from src import statioinary_bootstrap
-from src import global_state
-from src import calendar_iterator
-from src import strategy_selector, ad_hoc_strategy
-from src import executor_module, performance_evaluator
-from src import compliance_filters, budget_allocator
-from src import audit
-from src import signal_schema
-from src import metrics
 from src import logging
+from src import ticker_loader
+from src import data_broker
+from src import run
 
+import pickle
 
-logger=logging.setup_logger(name="backtest_logger", log_file="backtest.log")
+from src.selectors import cross_selectors
 
+class RealDataBacktester:
+    """
+    A class to run backtests on real historical data using multiple momentum/regression strategies.
+    """
+    def __init__(self, tickers=None, start_date="2022-01-01", end_date="2026-04-01", log_file="backtest_real.log"):
+        self.logger = logging.setup_logger(name="backtest_logger", log_file=log_file)
 
-tickers='ALGN,AAPL,PANW,AMD,ZS,MDLZ,XEL,VRSN,INSM,ON,WDAY,ENPH,DLTR,ADI,COST,ABNB,CEG,MSFT,GOOGL,CDNS,PYPL,FAST,JD,MTCH,SNPS,LULU,CMCSA,ADBE,ADSK'.split(',')
-broker = data_broker.DataBroker(tickers=tickers, start_date="2022-01-01", end_date="2026-04-01")
-universe_data = broker.fetch_universe_data()
-
-
-risk_adj_moment=strategy_selector.ComprehensiveMultiHorizonStrategy(
-    scorer=strategy_selector.SimpleRiskAdjustedScorer(),
-    long_window=252,
-    short_window=21,
-    structural_weight=0.6
-)
-
-linear_strategy = strategy_selector.ComprehensiveMultiHorizonStrategy(
-    scorer=strategy_selector.TraditionalLinearRegressionScorer(),
-    long_window=252,
-    short_window=21,
-    structural_weight=0.6
-)
-
-# Configuration A: Advanced Risk-Adjusted Blended Momentum
-advanced_risk_strat = strategy_selector.ComprehensiveMultiHorizonStrategy(
-    scorer=strategy_selector.GeometricDriftScorer(),
-    long_window=252,
-    short_window=21,
-    structural_weight=0.6
-)
-
-# Configuration B: Advanced Information Discrete Momentum (Time-Weighted)
-advanced_info_strat = strategy_selector.ComprehensiveMultiHorizonStrategy(
-    scorer=strategy_selector.WeightedLinearRegressionScorer(decay_factor=0.97),
-    long_window=126,
-    short_window=10,
-    structural_weight=0.7
-)
-
-portfolio_filter=compliance_filters.LiquidityComplianceFilter()
-
-
-world_data_dict= universe_data
-# module_c_regular=risk_adj_moment 
-module_c_regular=linear_strategy
-module_c1_adhoc=None #adhoc_exit
-
-#def run(module_c_regular):
-allocator=budget_allocator.IntegratedBudgetAllocator(top_percent=.10, allocation_type='equal')
-g_state=global_state.GlobalState(initial_capital=100_000,core_allocation_pct=1.0)
-executor=executor_module.TransactionExecutor(trade_delay=1)
-calendar = calendar_iterator.CalendarIterator(world_data_dict, interval="ME")
-rebalance_dates = calendar.generate_rebalance_dates()
-
-
-
-# Initialize a formal ledger
-audit_ledger: list[audit.AuditRecord] = []
-logger.info("Initializing Backtest Engine...")
-
-for i, today in enumerate(world_data_dict['price'].index):
-    snapshot = calendar.get_historical_snapshot(today)
-    market_prices = snapshot['price'].loc[today]
-    
-    # Initialize containers for this specific time-step's audit trail
-    current_telemetry = signal_schema.StrategyTelemetry()
-    g_state.signals.clear_signals()
-    
-    # 1. Strategy Calculation Pass
-    regular_strategy_output,adhoc_strategy_output=None, None
-    raw_regular_signals,filtered_regular_signals=[],[]
-    if today in rebalance_dates and (module_c_regular is not None):
-        # Update your strategy to return the StrategyTelemetry object instead of loose info dicts
-        regular_strategy_output, current_telemetry = module_c_regular.calculate_signals(snapshot)
-        raw_regular_signals = list(regular_strategy_output.signals)
-        regular_strategy_output = portfolio_filter.filter_signals(today, regular_strategy_output, snapshot)
-        filtered_regular_signals=list(regular_strategy_output.signals)
-
-        if regular_strategy_output.signals:
-            logger.info(f"=== REBALANCE EVENT TRIGGERED: {today.strftime('%Y-%m-%d')} ===")
-
-    raw_adhoc_signals,filtered_adhoc_signals=[],[]
-    if module_c1_adhoc is not None:
-        adhoc_strategy_output = module_c1_adhoc.evaluate_exits(g_state, snapshot)
-        raw_adhoc_signals= list(adhoc_strategy_output.signals)
-        adhoc_strategy_output = portfolio_filter.filter_signals(today, adhoc_strategy_output, snapshot)
-        filtered_adhoc_signals=list(adhoc_strategy_output.signals)
-    g_state.signals.update_signals(regular_strategy_output,adhoc_strategy_output)
-    
-
-    # 2. Allocation Pass
-    core_target_weights, sell_adhoc_orders, buy_adhoc_orders = allocator.allocate_capital(
-         g_state, market_prices
-    ) 
-    
-    
-    g_state.need_trade.set_core(core_target_weights, today)
-    g_state.need_trade.set_sell_adhoc(sell_adhoc_orders, today)
-    g_state.need_trade.set_buy_adhoc(buy_adhoc_orders, today)
-    
-    # 3. Execution & Portfolio State Capture
-    # (Capture the current trades before or during execution context if needed)
-    executor.execute_trades(g_state, today, market_prices)
-    g_state.record_daily_snapshot(today, market_prices)
-    
-    # 4. Commit to Audit Ledger only on actionable days to save memory, 
-    # or every day depending on your debugging requirements
-    if today in rebalance_dates and len(getattr(current_telemetry,'metrics',{}))!=0:
+        if tickers is None:
+            # Default "动量亏本组合" tickers
+            self.tickers = 'ALGN,AAPL,PANW,AMD,ZS,MDLZ,XEL,VRSN,INSM,ON,WDAY,ENPH,DLTR,ADI,COST,ABNB,CEG,MSFT,GOOGL,CDNS,PYPL,FAST,JD,MTCH,SNPS,LULU,CMCSA,ADBE,ADSK'.split(',')
+        elif isinstance(tickers, str):
+            self.tickers = tickers.split(',')
+        else:
+            self.tickers = tickers
+            
+        self.start_date = start_date
+        self.end_date = end_date
         
-        audit_ledger.append(audit.AuditRecord(
-            date=today,
-            telemetry=current_telemetry,
-            raw_regular_signals=raw_regular_signals,
-            filtered_regular_signals=filtered_regular_signals,
-            raw_adhoc_signals=raw_adhoc_signals,
-            filtered_adhoc_signals=filtered_adhoc_signals,
-            target_weights=core_target_weights,
-            executed_trades=[] # Populate from executor if your executor keeps track
-        ))
+        self.broker = None
+        self.universe_data = None
+        self.selector_type=None
+        self.portfolio_filter = None
+        self.strategies = {}
+        self.states = {}
 
-logger.info("Backtest execution completed successfully.")
+
+
+    def set_filter(self,filter):
+        self.portfolio_filter =filter
+
+    def fetch_data(self):
+        """Fetches the universe data and sets up compliance filters."""
+        self.broker = data_broker.DataBroker(
+            tickers=self.tickers,
+            start_date=self.start_date,
+            end_date=self.end_date
+        )
+        universe_data = self.broker.fetch_universe_data()
+        self.universe_data = ticker_loader.fix_data(universe_data)
+
+        
+
+    def fetch_bench_data(self,bench_tickers=['SPY','QQQ']):
+        self.bench_tickers=bench_tickers
+        self.bench_broker = data_broker.DataBroker(tickers=self.bench_tickers, start_date=self.start_date, end_date=self.end_date)
+        self.bench_universe_data = self.bench_broker.fetch_universe_data()
+
+
+    def set_strategy_selector(self,selector_type):
+        self.selector_type=selector_type
+
+    def build_strategies(self,scorers_dict,**kwargs):
+        """Initializes the strategies to be evaluated."""
+        if self.selector_type is None:
+            print('need to set selector_type first')
+
+        strategies={}
+        for name in scorers_dict:
+            print(f'  **create strategy for {name}')
+            strategy=  self.selector_type(
+            scorer=scorers_dict[name],
+            **kwargs
+        )
+            strategies[name]=strategy
+
+        self.strategies = strategies
+        return self.strategies
+        
+
+
+
+    def run_backtest(self, allocation_type=None):
+        """Runs the backtest loop across all loaded strategies."""
+        if self.universe_data is None:
+            self.fetch_data()
+        if not self.strategies:
+            print('error: no strategies')
+
+        if self.portfolio_filter is None:
+            #pportfolio_filter will be define with the total input price data for pre-calculation
+            print('error: no portfolio_filter')
+
+        self.states = {}
+        self.ledger_dict={}
+        for strat_name, strategy in self.strategies.items():
+            self.logger.info(f'******* {strat_name} *******')
+            kwargs = {}
+            if allocation_type is not None:
+                kwargs['allocation_type'] = allocation_type
+            
+            state,audit_ledger = run.run(
+                self.logger,
+                self.universe_data,
+                self.portfolio_filter,
+                strategy,
+                **kwargs
+            )
+            self.states[strat_name] = state
+            self.ledger_dict[strat_name] = audit_ledger
+        return self.states
+
+    def save_states(self, filepath='data/states.pickle'):
+        """Pickles the resulting backtest states into a file."""
+        import os
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'wb+') as f:
+            pickle.dump(self.states, f)
+
+
+from src import metrics
+def evaluate(g_state,effective_date='2023-01-01'):
+    df_nav=g_state.export_nav_dataframe()
+    df_nav_effect=df_nav.loc[df_nav.index>=effective_date]
+    print(metrics.calculate_metrics(df_nav_effect))
+    return df_nav_effect
+
+def print_state(g_state,today,market_prices):    
+    g_state.display_current_state(today,market_prices)
+
+
+if __name__ == "__main__":
+    # Example configurations/options from original script:
+    # totak_tickers = ticker_loader.load_total_tickers()
+    # tickers = totak_tickers
+    # tickers = ticker_loader.get_random_sample(totak_tickers, 30)
+    # ### section ETFs, most are beta, not good for
+    # tickers = ['SPY','QQQ','QQQE','IWM','XSW','XLY','XLV','XLU','XLRE','XLP','XLK','XLI','XLF','XLE','XLC','XLB','LABU','XBI']
+    
+    tickers='NEE,SO,DUK,CEG,AEP,SRE,D,ETR,XEL,VST,EXC,ED,PEG,WEC,PCG,DTE,AEE,ATO,CNP,EIX,AWK,ES,FE,CMS,LNT,EVRG,AES,NI,NRG,PNW'.split(',')
+    from src.scorers import mean_reversion_scorers
+    reverse_scorers={
+    'mean_reverse':mean_reversion_scorers.MeanReversionScorer(),
+    'bollinger_reversion':mean_reversion_scorers.BollingerReversionScorer(),
+    }
+
+    from src.filters import base_filter
+    filter=base_filter.NullFilter()
+
+    # Run with default '动量亏本组合'
+    backtester = RealDataBacktester(tickers=tickers, start_date="2022-01-01", end_date="2026-04-01", log_file="backtest_real.log")
+
+    backtester.set_filter(filter)
+    backtester.build_strategies(reverse_scorers)
+    states = backtester.run_backtest()
+    
+    # to save states:
+    # backtester.save_states('data/states.pickle')
+
+

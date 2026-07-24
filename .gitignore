@@ -3,3 +3,4 @@ iframe_*
 data*
 .*
 *.log
+*.pickle

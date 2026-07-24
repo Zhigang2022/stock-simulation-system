@@ -5,7 +5,10 @@ import io
 import re
 
 
-def plot_rebased_performance(df_price):
+def plot_rebased_performance(df_price,start_date=None,end_date=None):
+    #TODO: add start_date, end_date
+    # df_price first filter on start_date, and end-date
+
     """
     Plot rebased performance (starting at 100) for multiple tickers.
 
@@ -25,6 +28,10 @@ def plot_rebased_performance(df_price):
     df = df_price.copy()
     df.index = pd.to_datetime(df.index)
     df = df.sort_index()
+    if not start_date is None:
+        df=df.loc[start_date:]
+    if not end_date is None:
+        df=df.loc[:end_date]
 
     # 2. Normalize to 100 at start
     df_rebased = df / df.iloc[0] * 100
@@ -79,6 +86,19 @@ def plot_rebased_performance(df_price):
     )
 
     return fig
+
+def plot_all_tickers(df_slice, ticker_list):
+    """Generate and display one attribution chart per ticker in ticker_list."""
+    figures = {}
+    for ticker in ticker_list:
+        fig = plot_ticker_attribution(df_slice, ticker_symbol=ticker)
+        if fig is not None:
+            fig.show()
+            figures[ticker] = fig
+        else:
+            print(f"Skipped {ticker}: no data found")
+    return figures
+
 
 def plot_ticker_attribution(df_slice, ticker_symbol="CMCSA"):
     """Filters a dataframe slice for a specific ticker and plots its price,
@@ -194,42 +214,7 @@ def plot_ticker_attribution(df_slice, ticker_symbol="CMCSA"):
     return fig
 
 
-def parse_backtest_log(log_input):
-    # Regex Breakdown:
-    # ^.*?:\s* -> Ignores everything up to the first colon space (strips the log runtime prefix)
-    # (\d{4}-\d{2}-\d{2}) -> Group 1: Captures the true trade date
-    # (CORE_BUY|CORE_SELL) -> Group 2: Action Type
-    # (\w+) -> Group 3: Ticker
-    # ([\d.]+) -> Group 4: Shares
-    # ([\d.]+) -> Group 5: Price
-    # ([\d.]+) -> Group 6: Fee
-    pattern = r"^.*?:\s*(\d{4}-\d{2}-\d{2}).*?(CORE_BUY|CORE_SELL)\s+(\w+)\s+\.\.\.\s+([\d.]+)\s*@\s*([\d.]+),\s*fee:\s*([\d.]+)"
 
-    parsed_rows = []
-
-    # Handle string buffer or file reading
-    if isinstance(log_input, str) and "\n" in log_input:
-        file_stream = io.StringIO(log_input)
-    else:
-        file_stream = open(log_input, "r") if isinstance(log_input, str) else log_input
-
-    with file_stream as f:
-        for line in f:
-            match = re.search(pattern, line)
-            if match:
-                trade_date, tx_type, ticker, shares, price, fee = match.groups()
-                parsed_rows.append(
-                    {
-                        "date": pd.to_datetime(trade_date),
-                        "type": tx_type,
-                        "ticker": ticker,
-                        "shares": float(shares),
-                        "price": float(price),
-                        "fee": float(fee),
-                    }
-                )
-
-    return pd.DataFrame(parsed_rows)
 
 
 
@@ -262,7 +247,7 @@ def generate_balance_df(df_trade_history, daily_resolution=True):
     ).fillna(0)
 
     # 4. Compute the cumulative sum across time to get actual balances held
-    df_balance = round(df_pivot.cumsum(),3)
+    df_balance = df_pivot.cumsum()
 
     # 5. Optional: Fill in missing calendar days so you have a continuous timeline
     if daily_resolution:
@@ -373,7 +358,7 @@ def build_enhanced_ledger_from_balances(df_balance, df_prices):
         df.groupby("ticker")["reported_shares"]
         .ffill()
         .fillna(0)
-        .round(6)
+        # .round(6)
     )
 
     # Transaction deltas

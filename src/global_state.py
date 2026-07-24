@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from typing import Optional, Dict
 from src.executor_module import ExecutedTrade
 
+import logging
+logger = logging.getLogger(__name__) 
+
+
 @dataclass
 class Future_Transaction:
     # Defines the structure and handles default initialization
@@ -31,16 +35,19 @@ class Future_Transaction:
         self.sell_adhoc_date=None
 
     def set_core(self,core_target_weights,core_target_date):
+        logging.info(f'    core to buy: {len(core_target_weights)} ')
         if len(core_target_weights)!=0:
             self.core_target_weights=core_target_weights
             self.core_target_date=core_target_date
 
     def set_sell_adhoc(self,sell_adhoc,sell_adhoc_date):
+        logging.info(f'    adhoc to sell: {len(sell_adhoc)} ')
         if len(sell_adhoc)!=0:
             self.sell_adhoc=sell_adhoc
             self.sell_adhoc_date=sell_adhoc_date
 
     def set_buy_adhoc(self,buy_adhoc,buy_adhoc_date):
+        logging.info(f'    adhoc to buy: {len(buy_adhoc)} ')
         if len(buy_adhoc)!=0:
             self.buy_adhoc=buy_adhoc
             self.buy_adhoc_date=buy_adhoc_date

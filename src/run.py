@@ -1,28 +1,15 @@
-from src import data_broker
-from src import statioinary_bootstrap
 from src import global_state
-
 from src import calendar_iterator
-from src import strategy_selector, ad_hoc_strategy
-
-from src import executor_module, performance_evaluator
-from src import compliance_filters, budget_allocator
+from src import executor_module
+from src import budget_allocator
 from src import audit
-
 from src import signal_schema
-from src import metrics
 
-from src import logging
-from src import ticker_loader
 
-totak_tickers=ticker_loader.load_total_tickers()
-logger=logging.setup_logger(name="backtest_logger", log_file="backtest.log")
-
-def run(world_data_dict,module_c_regular,module_c1_adhoc=None,is_filter=True,allocation_type='score_weighted'):
+def run(logger,world_data_dict,portfolio_filter,module_c_regular,module_c1_adhoc=None,is_filter=True,allocation_type='equal'):
     g_state=global_state.GlobalState(initial_capital=100_000,core_allocation_pct=1.0)
     
     calendar = calendar_iterator.CalendarIterator(world_data_dict, interval="ME")
-    portfolio_filter=compliance_filters.LiquidityComplianceFilter()
     allocator=budget_allocator.IntegratedBudgetAllocator(top_percent=.10, allocation_type=allocation_type)
     executor=executor_module.TransactionExecutor(trade_delay=1)
 
@@ -46,6 +33,10 @@ def run(world_data_dict,module_c_regular,module_c1_adhoc=None,is_filter=True,all
         raw_regular_signals,filtered_regular_signals=[],[]
         if today in rebalance_dates and (module_c_regular is not None):
             # Update your strategy to return the StrategyTelemetry object instead of loose info dicts
+            
+            import pandas as pd
+            if today>=pd.to_datetime('2023-01-31'):
+                print(111)
             regular_strategy_output, current_telemetry = module_c_regular.calculate_signals(snapshot)
             raw_regular_signals = list(regular_strategy_output.signals)
             if is_filter:
@@ -97,4 +88,4 @@ def run(world_data_dict,module_c_regular,module_c1_adhoc=None,is_filter=True,all
             ))
     
     logger.info("Backtest execution completed successfully.")
-    return g_state
+    return g_state,audit_ledger
