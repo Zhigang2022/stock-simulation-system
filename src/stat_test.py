@@ -105,13 +105,85 @@ are normally distributed using the Shapiro-Wilk test:
 def automated_paired_test(series1: pd.Series, series2: pd.Series):
     df_clean = pd.concat([series1, series2], axis=1).dropna()
     differences = df_clean.iloc[:, 0] - df_clean.iloc[:, 1]
-    
+
     # Test for normality
     _, normality_p = stats.shapiro(differences)
-    
+
     if normality_p > 0.05:
         # Differences are normal -> Use Paired t-test
         return test_paired_series_parametric(series1, series2)
     else:
         # Differences are not normal -> Use Wilcoxon
         return test_paired_series_non_parametric(series1, series2)
+
+
+'''
+One-sided variants: same pairing/statistics as above, but testing a
+directional H1 (series1 > series2, or series1 < series2) instead of
+"different from zero". Use these when the question is specifically
+"did the scorer beat the benchmark", not just "did it differ from it" --
+a one-sided test has more power for that directional question at the
+same alpha, at the cost of being unable to detect the opposite direction.
+`alternative` is passed straight through to scipy, so it must be one of
+scipy's own labels: "greater" (series1 > series2) or "less" (series1 < series2).
+'''
+
+def test_paired_series_parametric_one_sided(
+    series1: pd.Series, series2: pd.Series, alternative: str = "greater"
+) -> dict:
+    """
+    One-sided paired Student's t-test on two aligned series.
+
+    H0: mean(series1 - series2) <= 0 (if alternative="greater")
+    H1: mean(series1 - series2) > 0
+    """
+    if alternative not in ("greater", "less"):
+        raise ValueError(f"alternative must be 'greater' or 'less', got {alternative!r}")
+
+    df_clean = pd.concat([series1, series2], axis=1).dropna()
+    t_stat, p_value = stats.ttest_rel(df_clean.iloc[:, 0], df_clean.iloc[:, 1], alternative=alternative)
+
+    return {
+        "test_name": f"Paired t-test (one-sided, {alternative})",
+        "statistic": t_stat,
+        "p_value": p_value,
+        "significant_at_5pct": p_value < 0.05,
+    }
+
+
+def test_paired_series_non_parametric_one_sided(
+    series1: pd.Series, series2: pd.Series, alternative: str = "greater"
+) -> dict:
+    """
+    One-sided Wilcoxon signed-rank test on two aligned series.
+
+    H0: median(series1 - series2) <= 0 (if alternative="greater")
+    H1: median(series1 - series2) > 0
+    """
+    if alternative not in ("greater", "less"):
+        raise ValueError(f"alternative must be 'greater' or 'less', got {alternative!r}")
+
+    df_clean = pd.concat([series1, series2], axis=1).dropna()
+    statistic, p_value = stats.wilcoxon(df_clean.iloc[:, 0], df_clean.iloc[:, 1], alternative=alternative)
+
+    return {
+        "test_name": f"Wilcoxon Signed-Rank Test (one-sided, {alternative})",
+        "statistic": statistic,
+        "p_value": p_value,
+        "significant_at_5pct": p_value < 0.05,
+    }
+
+
+def automated_paired_test_one_sided(series1: pd.Series, series2: pd.Series, alternative: str = "greater"):
+    df_clean = pd.concat([series1, series2], axis=1).dropna()
+    differences = df_clean.iloc[:, 0] - df_clean.iloc[:, 1]
+
+    # Test for normality
+    _, normality_p = stats.shapiro(differences)
+
+    if normality_p > 0.05:
+        # Differences are normal -> Use one-sided paired t-test
+        return test_paired_series_parametric_one_sided(series1, series2, alternative=alternative)
+    else:
+        # Differences are not normal -> Use one-sided Wilcoxon
+        return test_paired_series_non_parametric_one_sided(series1, series2, alternative=alternative)

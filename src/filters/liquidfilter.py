@@ -1,7 +1,7 @@
 import pandas as pd
 from typing import List
 from src.signal_schema import StrategyOutput, SignalPayload
-from filters.base_filter import  SignalFilter
+from src.filters.base_filter import SignalFilter
 
 class LiquidityComplianceFilter(SignalFilter):
     """

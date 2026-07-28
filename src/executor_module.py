@@ -64,7 +64,7 @@ class TransactionExecutor:
                             shares=shares, price=price, gross_value=gross, fee=fee, net_value=gross - fee
                         )
                         # State is updated immediately following calculation loop
-                        logger.info(f'    {today}: ADHOC_SELL {ticker} ... {round(shares,2)}@{round(price,2)}, fee: {fee}')
+                        logger.info(f'    {today}: ADHOC_SELL {signal.ticker} ... {round(shares,2)}@{round(price,2)}, fee: {fee}')
                         state.commit_executed_trade(trade_rec)
 
             state.need_trade.clear_adhoc_sell()
