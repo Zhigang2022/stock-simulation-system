@@ -1,6 +1,6 @@
 .*/
 iframe_*
-data*
+/data/
 .*
 *.log
 *.pickle
