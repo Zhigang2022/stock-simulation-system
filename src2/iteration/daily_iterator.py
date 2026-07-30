@@ -9,7 +9,7 @@ This module is now just the orchestrator -- each phase lives in its own
 file, in the order they run each day:
   1. allocation_regular.py  -- CORE sleeve: vect_calc selection + WEIGHT sizing (g_state-aware), rebalance days only
   2. allocation_tactical.py -- TACTICAL sleeve: live strategy + WEIGHT/position sizing (g_state-aware) + budget check, every day (optional)
-  3. trade_implement.py     -- fills whatever got staged, gated by trade_delay
+  3. trade_implement.py     -- fills whatever got staged, gated by trade_delay (a pandas frequency string, e.g. "1h"/"1D"/"1ME")
 
 Weight/position sizing deliberately lives in the allocation_*.py files, not
 in vect_calc: vect_calc is precomputed and stateless (no g_state), so it
@@ -34,14 +34,16 @@ This package has no src/ dependency:
   mostly-unused dataclass. Charting this history is evaluation/plot.py's
   job, not this record's.
 
-TACTICAL sleeve (optional): pass `module_c1_adhoc`, an object with an
-`evaluate_exits(g_state, snapshot) -> StrategyOutput` method (see
-src/ad_hoc_strategy.py's AdHocChandelierExit for the shape), to run a live,
-day-by-day tactical strategy (e.g. a MACD bull/bear-cross on a single
-ticker) alongside the precomputed core sleeve. The strategy itself should
-only decide kind/ticker (BUY vs EXIT); allocation_tactical.py decides size.
+TACTICAL sleeve (optional): pass `adhoc_strategy`, an object with an
+`evaluate_exits(g_state, df_metrics_adhoc, today) -> StrategyOutput` method
+(see src/ad_hoc_strategy.py's AdHocChandelierExit for the shape), to run a
+live, day-by-day tactical strategy (e.g. a MACD bull/bear-cross on a single
+ticker) alongside the precomputed core sleeve. `df_metrics_adhoc` is itself
+precomputed once, vectorized (e.g. vector_calc.build_metrics_table with
+score_fn=vector_calc.macd_cross_score) and passed straight through here --
+the strategy only decides kind/ticker (BUY vs EXIT) off that table;
+allocation_tactical.py decides size.
 """
-import functools
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -51,7 +53,7 @@ from src2.states import GlobalState
 from .allocation_regular import apply_regular_allocation
 from .allocation_tactical import apply_tactical_allocation
 from .trade_implement import make_executor, implement_trades
-from .calendar_snapshot import generate_rebalance_dates, get_historical_snapshot
+from .calendar_snapshot import generate_rebalance_dates
 
 
 @dataclass
@@ -68,9 +70,10 @@ def run_daily_iteration(
     interval: str = "ME",
     initial_capital: float = 100_000.0,
     core_allocation_pct: float = 1.0,
-    trade_delay: int = 1,
+    trade_delay: str = "1D",
     fee_rate: float = 0.001,
-    module_c1_adhoc=None,
+    tactical_strategy=None,
+    df_metrics_adhoc=None,
     tactical_reserve_cash_pct: float = 0.0,
     tactical_max_position_pct: float = 1.0,
     logger=None,
@@ -100,7 +103,6 @@ def run_daily_iteration(
 
     g_state = GlobalState(initial_capital=initial_capital, core_allocation_pct=core_allocation_pct)
     executor = make_executor(fee_rate=fee_rate, trade_delay=trade_delay)
-    get_snapshot = functools.partial(get_historical_snapshot, world_data_dict)
     audit_ledger: list[RebalanceRecord] = []
 
     for today in world_data_dict["price"].index:
@@ -116,9 +118,9 @@ def run_daily_iteration(
             audit_ledger.append(RebalanceRecord(date=today, target_weights=core_target_weights))
 
         # 2. TACTICAL (AD-HOC) ALLOCATION -- every day, if wired in
-        if module_c1_adhoc is not None:
+        if tactical_strategy is not None:
             apply_tactical_allocation(
-                g_state, module_c1_adhoc, get_snapshot, today, market_prices,
+                g_state, tactical_strategy, df_metrics_adhoc, today, market_prices,
                 reserve_cash_pct=tactical_reserve_cash_pct,
                 max_position_pct=tactical_max_position_pct,
             )

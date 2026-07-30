@@ -62,22 +62,22 @@ class Future_Transaction:
             self.buy_adhoc=buy_adhoc
             self.buy_adhoc_date=buy_adhoc_date
 
-    def is_trade_core(self,today,delay_days):
+    def is_trade_core(self,today,delay_offset):
         if self.core_target_date is not None:
-            if (today-self.core_target_date).days>=delay_days:
+            if today >= self.core_target_date + delay_offset:
                 return True
         return False
 
-    def is_sell_adhoc(self,today,delay_days):
+    def is_sell_adhoc(self,today,delay_offset):
         if self.sell_adhoc_date is not None:
-            if (today-self.sell_adhoc_date).days>=delay_days:
+            if today >= self.sell_adhoc_date + delay_offset:
                 return True
 
         return False
 
-    def is_buy_adhoc(self,today,delay_days):
+    def is_buy_adhoc(self,today,delay_offset):
         if self.buy_adhoc_date is not None:
-            if (today-self.buy_adhoc_date).days>=delay_days:
+            if today >= self.buy_adhoc_date + delay_offset:
                 return True
         return False
 

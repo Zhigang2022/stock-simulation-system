@@ -9,20 +9,25 @@ import yfinance as yf
 
 
 class DataBroker:
-    def __init__(self, tickers: list[str], start_date: str, end_date: str):
+    def __init__(self, tickers: list[str], start_date: str, end_date: str, interval: str = "1d"):
         self.tickers = tickers
         self.start_date = start_date
         self.end_date = end_date
+        self.interval = interval
         self.raw_data = None
 
     def fetch_universe_data(self) -> dict[str, pd.DataFrame]:
         """
         Fetches historical data from yfinance and pivots into aligned matrices.
+        `self.interval` (default "1d") is passed straight through to
+        yf.download -- e.g. "1h" for hourly bars, capped by yfinance at
+        roughly the last 730 days of intraday history.
         """
         df = yf.download(
             tickers=self.tickers,
             start=self.start_date,
             end=self.end_date,
+            interval=self.interval,
             group_by='ticker'
         )
         self.raw_data = df

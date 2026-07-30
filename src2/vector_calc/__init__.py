@@ -21,10 +21,17 @@ from .calculator import (
     build_target_weight_table,
 )
 from .scorer_mean_reversion import rolling_mean_reversion_score
-from .scorer_momentum import rolling_geometric_drift_score
+from .scorer_momentum import (
+    rolling_geometric_drift_score,
+    rolling_risk_adjusted_score,
+    rolling_linear_regression_score,
+    rolling_weighted_regression_score,
+)
 from .scorer_composite import rolling_composite_score
+from .scorer_macd import macd_cross_score
 from .filter_null import null_filter
 from .filter_liquidity import make_liquidity_filter
+from .filter_macd import make_macd_trend_filter
 from .selector_top_percent import rank_and_weight_top_percent
 
 __all__ = [
@@ -34,7 +41,12 @@ __all__ = [
     "rolling_mean_reversion_score",
     "rolling_geometric_drift_score",
     "rolling_composite_score",
+    "macd_cross_score",
+    "rolling_risk_adjusted_score",
+    "rolling_linear_regression_score",
+    "rolling_weighted_regression_score",
     "null_filter",
     "make_liquidity_filter",
+    "make_macd_trend_filter",
     "rank_and_weight_top_percent",
 ]

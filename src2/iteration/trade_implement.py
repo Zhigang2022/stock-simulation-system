@@ -12,8 +12,11 @@ ExecutedTrade + TransactionExecutor: evaluates whatever
 regular_allocation/tactical_allocation staged on g_state.need_trade and
 applies transactional mutations atomically. Priority: ad-hoc exits, then
 ad-hoc buys, then core rebalance (sells before buys within core). Gated by
-`trade_delay` (days between a signal being staged and it being allowed to
-fill; 0 = same day).
+`trade_delay` (a pandas frequency string -- e.g. "1h", "1D", "1ME" --
+parsed once via pd.tseries.frequencies.to_offset into the elapsed time
+required between a signal being staged and it being allowed to fill; "0h"
+= same bar). A DateOffset rather than a Timedelta so calendar units like
+"ME"/"YE" (not a fixed duration) work the same way as "h"/"D".
 """
 import logging
 from dataclasses import dataclass
@@ -42,9 +45,9 @@ class TransactionExecutor:
     Stateful Transaction Executor. Evaluates net weight targets and applies
     transactional mutations atomically.
     """
-    def __init__(self, fee_rate: float = 0.001, trade_delay: int = 1):
+    def __init__(self, fee_rate: float = 0.001, trade_delay: str = "1D"):
         self.fee_rate = fee_rate
-        self.trade_delay = trade_delay
+        self.trade_delay = pd.tseries.frequencies.to_offset(trade_delay)
 
     def execute_trades(self, state, today: pd.Timestamp, current_prices: pd.Series):
         """
@@ -183,7 +186,7 @@ class TransactionExecutor:
             state.record_daily_snapshot(today, current_prices, kind='act')
 
 
-def make_executor(fee_rate: float = 0.001, trade_delay: int = 1) -> TransactionExecutor:
+def make_executor(fee_rate: float = 0.001, trade_delay: str = "1D") -> TransactionExecutor:
     return TransactionExecutor(fee_rate=fee_rate, trade_delay=trade_delay)
 
 

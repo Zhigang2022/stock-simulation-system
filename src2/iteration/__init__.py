@@ -2,11 +2,13 @@
 Piece 2 of 3 (vector_calc / iteration / evaluation): the stateful,
 path-dependent day-by-day execution loop, split into phases:
 
-- calendar_snapshot.py   -- rebalance dates + leak-safe daily snapshot (local, no src/ dependency)
-- allocation_regular.py  -- CORE sleeve: vect_calc selection + weight sizing (rebalance days only)
-- allocation_tactical.py -- TACTICAL sleeve: live ad-hoc strategy + position sizing + local budget check (every day, optional)
-- trade_implement.py     -- fills staged orders, gated by trade_delay
+- calendar_snapshot.py    -- rebalance dates + leak-safe daily snapshot (local, no src/ dependency)
+- allocation_regular.py   -- CORE sleeve: vect_calc selection + weight sizing (rebalance days only)
+- strategy_adhoc_macd.py  -- SignalPayload/StrategyOutput + MacdCrossStrategy, a module_c1_adhoc implementation (MACD bull/bear-cross)
+- allocation_tactical.py  -- TACTICAL sleeve: live ad-hoc strategy + position sizing + local budget check (every day, optional)
+- trade_implement.py      -- fills staged orders, gated by trade_delay
 - daily_iterator.py       -- orchestrates the phases above; run_daily_iteration is the main entry point
+- logging_setup.py        -- console+file logger ("backtest_logger") shared by trade_implement.py fills and daily_iterator.py rebalance events
 
 Weight/position sizing lives in the allocation_*.py files (not vect_calc)
 because only they have access to live g_state (cash, current positions).
@@ -26,6 +28,8 @@ from .allocation_regular import apply_regular_allocation
 from .allocation_tactical import apply_tactical_allocation
 from .trade_implement import make_executor, implement_trades
 from .calendar_snapshot import generate_rebalance_dates, get_historical_snapshot
+from .logging_setup import setup_logger
+from .strategy_adhoc_macd import SignalPayload, StrategyOutput, MacdCrossStrategy, MacdCrossDailyTrendFilterStrategy
 
 __all__ = [
     "run_daily_iteration",
@@ -35,4 +39,9 @@ __all__ = [
     "implement_trades",
     "generate_rebalance_dates",
     "get_historical_snapshot",
+    "setup_logger",
+    "SignalPayload",
+    "StrategyOutput",
+    "MacdCrossStrategy",
+    "MacdCrossDailyTrendFilterStrategy",
 ]

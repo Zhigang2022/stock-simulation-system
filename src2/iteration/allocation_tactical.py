@@ -83,34 +83,32 @@ def _budget_check(g_state, signals, market_prices: pd.Series):
 
 def apply_tactical_allocation(
     g_state,
-    module_c1_adhoc,
-    get_snapshot,
-    today: pd.Timestamp,
+    adhoc_strategy,
+    df_metrics_adhoc,
+    today,
     market_prices: pd.Series,
-    sizing_fn=naive_position_sizing,
     reserve_cash_pct: float = 0.0,
     max_position_pct: float = 1.0,
 ):
     """
-    Evaluates module_c1_adhoc for `today` (strategy only decides
-    kind/ticker -- BUY vs EXIT -- not size), runs sizing_fn on every
-    AD_HOC_BUY signal to set its quantity_target, budget-checks the result,
-    and stages the survivors on g_state.need_trade for trade_implement to
-    pick up. `get_snapshot` is a callable(today) -> snapshot dict, typically
-    calendar_snapshot.get_historical_snapshot bound to world_data_dict.
-    Returns (sell_adhoc_orders, buy_adhoc_orders).
+    Runs adhoc_strategy.evaluate_exits(g_state, df_metrics_adhoc, today) ->
+    StrategyOutput, sizes any AD_HOC_BUY signals via naive_position_sizing,
+    runs the local budget check, then stages sells/buys on
+    g_state.need_trade for trade_implement.py to pick up.
     """
-    snapshot = get_snapshot(today)
-    adhoc_strategy_output = module_c1_adhoc.evaluate_exits(g_state, snapshot)
+    strategy_output = adhoc_strategy.evaluate_exits(g_state, df_metrics_adhoc, today)
+    if not strategy_output.signals:
+        return
 
-    for signal in adhoc_strategy_output.signals:
+    for signal in strategy_output.signals:
         if signal.kind == "AD_HOC_BUY":
-            signal.quantity_target = sizing_fn(
+            signal.quantity_target = naive_position_sizing(
                 g_state, signal, market_prices,
                 reserve_cash_pct=reserve_cash_pct, max_position_pct=max_position_pct,
             )
 
-    sell_adhoc_orders, buy_adhoc_orders = _budget_check(g_state, adhoc_strategy_output.signals, market_prices)
-    g_state.need_trade.set_sell_adhoc(sell_adhoc_orders, today)
-    g_state.need_trade.set_buy_adhoc(buy_adhoc_orders, today)
-    return sell_adhoc_orders, buy_adhoc_orders
+    sell_orders, buy_orders = _budget_check(g_state, strategy_output.signals, market_prices)
+    if sell_orders:
+        g_state.need_trade.set_sell_adhoc(sell_orders, today)
+    if buy_orders:
+        g_state.need_trade.set_buy_adhoc(buy_orders, today)
