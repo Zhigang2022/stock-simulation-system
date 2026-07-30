@@ -1,7 +1,26 @@
-.*/
+# === Python build / cache ===
 __pycache__/
-iframe_*
-/data/
-.*
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# === Virtual env ===
+.venv/
+
+# === OS / editor / tooling cruft ===
+.DS_Store
+.idea/
+.vscode/
+
+# === Jupyter ===
+.ipynb_checkpoints/
+
+# === Project runtime artifacts ===
 *.log
 *.pickle
+iframe_*
+/data/
+notebooks/drop_data/
+dev_notebooks/drop_data/

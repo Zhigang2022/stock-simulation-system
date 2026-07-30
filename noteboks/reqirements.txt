@@ -1,6 +1,0 @@
-yfinance
-pandas
-jupyter lab
-matplotlib
-seaborn
-tqdm
