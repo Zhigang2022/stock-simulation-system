@@ -17,6 +17,10 @@ dist/
 # === Jupyter ===
 .ipynb_checkpoints/
 
+# === Personal todo / scratch files (local-only) ===
+.todo.md
+TODO.md
+
 # === Project runtime artifacts ===
 *.log
 *.pickle
